@@ -41,4 +41,31 @@ public sealed class EnvTests
         Assert.Equal(new HashSet<long> { 7, 8 }, set);
         Assert.Empty(Env.ChatAdmins(900003));
     }
+
+    [Fact]
+    public void IsOpenControl_Global_Or_PerChat()
+    {
+        try
+        {
+            Assert.False(Env.IsOpenControl(900010));
+            Environment.SetEnvironmentVariable("OPEN_CONTROL_900010", "yes");
+            Assert.True(Env.IsOpenControl(900010));
+            Assert.False(Env.IsOpenControl(900011));
+            Environment.SetEnvironmentVariable("OPEN_CONTROL", "1");
+            Assert.True(Env.IsOpenControl(900011));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPEN_CONTROL", null);
+            Environment.SetEnvironmentVariable("OPEN_CONTROL_900010", null);
+        }
+    }
+
+    [Fact]
+    public void IsOpenControl_Garbage_Means_Off()
+    {
+        Environment.SetEnvironmentVariable("OPEN_CONTROL_900012", "maybe");
+        try { Assert.False(Env.IsOpenControl(900012)); }
+        finally { Environment.SetEnvironmentVariable("OPEN_CONTROL_900012", null); }
+    }
 }

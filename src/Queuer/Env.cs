@@ -41,4 +41,12 @@ public static class Env
             if (long.TryParse(p.Trim(), out var id)) set.Add(id);
         return set;
     }
+
+    // OPEN_CONTROL=1 (all chats) or OPEN_CONTROL_<chatId>=1: anyone may manage queue.
+    public static bool IsOpenControl(long chatId)
+        => IsOn(Environment.GetEnvironmentVariable("OPEN_CONTROL"))
+        || IsOn(Environment.GetEnvironmentVariable($"OPEN_CONTROL_{chatId}"));
+
+    private static bool IsOn(string? v)
+        => v?.Trim().ToLowerInvariant() is "1" or "true" or "yes" or "on";
 }
