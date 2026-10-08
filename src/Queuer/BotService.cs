@@ -222,7 +222,7 @@ public sealed class BotService(ITelegramBotClient bot)
 
     private async Task<bool> IsAdmin(long chatId, long userId, CancellationToken ct)
     {
-        if (Env.ChatAdmins(chatId).Contains(userId)) return true; // .env list
+        if (Env.ChatAdmins(chatId).Contains(userId)) { Console.WriteLine($"admin {userId} via env"); return true; } // .env list
         if (_adminCache.TryGetValue((chatId, userId), out var c) && DateTimeOffset.UtcNow - c.At < TimeSpan.FromMinutes(5))
             return c.Admin;
         try
@@ -230,9 +230,10 @@ public sealed class BotService(ITelegramBotClient bot)
             var m = await bot.GetChatMember(chatId, userId, cancellationToken: ct);
             var admin = m.Status is ChatMemberStatus.Administrator or ChatMemberStatus.Creator;
             _adminCache[(chatId, userId)] = (admin, DateTimeOffset.UtcNow);
+            Console.WriteLine($"admin {userId} via chat = {admin}");
             return admin;
         }
-        catch (ApiRequestException) { return false; } // unknown, deny
+        catch (ApiRequestException) { Console.WriteLine($"admin {userId} deny"); return false; } // unknown, deny
     }
 
     private async Task<string?> SwapPrompt(long chatId, long userId, CancellationToken ct)
