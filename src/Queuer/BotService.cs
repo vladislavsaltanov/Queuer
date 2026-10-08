@@ -27,6 +27,7 @@ public sealed class BotService(ITelegramBotClient bot)
     private readonly ConcurrentDictionary<(long, long), Offer> _offers = new(); // key: chat + from
     private readonly ConcurrentDictionary<long, Prompt> _prompts = new(); // key: chat
     private readonly ConcurrentDictionary<(long, long), (bool Admin, DateTimeOffset At)> _adminCache = new();
+    private readonly ConcurrentDictionary<long, List<QueueUser>> _closed = new(); // last closed list
 
     private static readonly TimeSpan PoolTtl = TimeSpan.FromHours(3);
     private static readonly TimeSpan WarnBefore = TimeSpan.FromMinutes(10);
@@ -83,14 +84,20 @@ public sealed class BotService(ITelegramBotClient bot)
 
         if (m.Text.StartsWith("/start_queue"))
         {
-            if (!await IsAdmin(chatId, m.From.Id, ct)) return; // silent for others
+            if (!await CanControl(chatId, m.From.Id, ct)) return; // silent for others
             if (_chats.ContainsKey(chatId)) return; // one queue per chat
             await StartQueue(chatId, ct);
             return;
         }
+        if (m.Text.StartsWith("/continue_queue"))
+        {
+            if (!await CanControl(chatId, m.From.Id, ct)) return;
+            await ContinueQueue(chatId, ct);
+            return;
+        }
         if (m.Text.StartsWith("/close_queue"))
         {
-            if (!await IsAdmin(chatId, m.From.Id, ct)) return;
+            if (!await CanControl(chatId, m.From.Id, ct)) return;
             await CloseQueue(chatId, ct);
             return;
         }
@@ -149,7 +156,7 @@ public sealed class BotService(ITelegramBotClient bot)
         }
         if (data is "extend")
         {
-            if (!await IsAdmin(chatId, q.From.Id, ct)) { await Alert("Только для админов"); return; }
+            if (!await CanControl(chatId, q.From.Id, ct)) { await Alert("Только для админов"); return; }
             if (_chats.TryGetValue(chatId, out var cq)) cq.Deadline += TimeSpan.FromHours(1);
             await SafeDelete(chatId, q.Message.MessageId, ct);
             await bot.AnswerCallbackQuery(q.Id, cancellationToken: ct);
@@ -157,7 +164,7 @@ public sealed class BotService(ITelegramBotClient bot)
         }
         if (data is "close_now")
         {
-            if (!await IsAdmin(chatId, q.From.Id, ct)) { await Alert("Только для админов"); return; }
+            if (!await CanControl(chatId, q.From.Id, ct)) { await Alert("Только для админов"); return; }
             await CloseQueue(chatId, ct);
             await SafeDelete(chatId, q.Message.MessageId, ct);
             return;
@@ -173,7 +180,21 @@ public sealed class BotService(ITelegramBotClient bot)
 
     private async Task StartQueue(long chatId, CancellationToken ct)
     {
+        _closed.TryRemove(chatId, out _); // fresh start drops saved list
+        await PostQueue(chatId, new ChatQueue { Deadline = DateTimeOffset.UtcNow + PoolTtl }, ct);
+    }
+
+    private async Task ContinueQueue(long chatId, CancellationToken ct)
+    {
+        if (_chats.ContainsKey(chatId)) return; // active wins
+        if (!_closed.TryRemove(chatId, out var list) || list.Count == 0) return; // nothing saved
         var q = new ChatQueue { Deadline = DateTimeOffset.UtcNow + PoolTtl };
+        q.Core.Restore(list);
+        await PostQueue(chatId, q, ct);
+    }
+
+    private async Task PostQueue(long chatId, ChatQueue q, CancellationToken ct)
+    {
         _chats[chatId] = q;
         var sent = await bot.SendMessage(chatId, q.Core.Render(),
             replyMarkup: Buttons(), cancellationToken: ct);
@@ -188,6 +209,7 @@ public sealed class BotService(ITelegramBotClient bot)
         try
         {
             q.Core.Close();
+            if (q.Core.List.Count > 0) _closed[chatId] = [.. q.Core.List]; // keep for /continue_queue
             q.Cts.Cancel();
             await bot.EditMessageText(chatId, q.MsgId, q.Core.Render(), cancellationToken: ct);
             await bot.EditMessageReplyMarkup(chatId, q.MsgId, replyMarkup: null, cancellationToken: ct);
@@ -235,6 +257,10 @@ public sealed class BotService(ITelegramBotClient bot)
         }
         catch (ApiRequestException) { Console.WriteLine($"admin {userId} deny"); return false; } // unknown, deny
     }
+
+    // Open flag or admin may manage queue.
+    private async Task<bool> CanControl(long chatId, long userId, CancellationToken ct)
+        => Env.IsOpenControl(chatId) || await IsAdmin(chatId, userId, ct);
 
     private async Task<string?> SwapPrompt(long chatId, long userId, CancellationToken ct)
     {

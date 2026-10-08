@@ -87,4 +87,13 @@ public sealed class QueueCoreTests
         Assert.NotNull(q.Join(new QueueUser(2, "B"), DateTimeOffset.UtcNow));
         Assert.Contains("закрыта", q.Render());
     }
+
+    [Fact]
+    public void Restore_Keeps_Order_Skips_Dups()
+    {
+        var q = New();
+        q.Restore([new QueueUser(2, "B"), new QueueUser(1, "A"), new QueueUser(2, "B2")]);
+        Assert.Equal([2, 1], q.List.Select(u => u.Id));
+        Assert.Equal("B", q.List[0].Name);
+    }
 }
