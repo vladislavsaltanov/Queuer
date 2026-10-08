@@ -69,9 +69,12 @@ public sealed class BotService(ITelegramBotClient bot)
                 case MessageOriginChat c: lines.Add($"ID чата: {c.SenderChat.Id}"); break;
                 case MessageOriginChannel ch: lines.Add($"ID канала: {ch.Chat.Id}"); break;
             }
-            if (m.ForwardFrom is not null) lines.Add($"ID автора: {m.ForwardFrom.Id}");
-            if (m.ForwardFromChat is not null) lines.Add($"ID чата: {m.ForwardFromChat.Id}");
-            if (m.ForwardSenderName is not null) lines.Add($"Автор скрыт: {m.ForwardSenderName}");
+            if (m.ForwardOrigin is null) // legacy, only when new format missing
+            {
+                if (m.ForwardFrom is not null) lines.Add($"ID автора: {m.ForwardFrom.Id}");
+                if (m.ForwardFromChat is not null) lines.Add($"ID чата: {m.ForwardFromChat.Id}");
+                if (m.ForwardSenderName is not null) lines.Add($"Автор скрыт: {m.ForwardSenderName}");
+            }
             await bot.SendMessage(chatId, string.Join("\n", lines), cancellationToken: ct);
             return;
         }
