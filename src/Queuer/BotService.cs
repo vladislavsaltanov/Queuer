@@ -58,6 +58,24 @@ public sealed class BotService(ITelegramBotClient bot)
             return;
         }
 
+        // TEMP: ids for forwarded messages. Revert later.
+        if (m.Chat.Type is ChatType.Private && (m.ForwardOrigin is not null || m.ForwardFrom is not null || m.ForwardFromChat is not null || m.ForwardSenderName is not null))
+        {
+            var lines = new List<string> { $"Твой ID: {m.From.Id}" };
+            switch (m.ForwardOrigin)
+            {
+                case MessageOriginUser u: lines.Add($"ID автора: {u.SenderUser.Id}"); break;
+                case MessageOriginHiddenUser h: lines.Add($"Автор скрыт: {h.SenderUserName}"); break;
+                case MessageOriginChat c: lines.Add($"ID чата: {c.SenderChat.Id}"); break;
+                case MessageOriginChannel ch: lines.Add($"ID канала: {ch.Chat.Id}"); break;
+            }
+            if (m.ForwardFrom is not null) lines.Add($"ID автора: {m.ForwardFrom.Id}");
+            if (m.ForwardFromChat is not null) lines.Add($"ID чата: {m.ForwardFromChat.Id}");
+            if (m.ForwardSenderName is not null) lines.Add($"Автор скрыт: {m.ForwardSenderName}");
+            await bot.SendMessage(chatId, string.Join("\n", lines), cancellationToken: ct);
+            return;
+        }
+
         if (m.Text.StartsWith("/start_queue"))
         {
             if (!await IsAdmin(chatId, m.From.Id, ct)) return; // silent for others
