@@ -16,10 +16,10 @@ public sealed class QueueCore
     // Null = ok, text = alert.
     public string? Join(QueueUser u, DateTimeOffset now)
     {
-        if (IsClosed) return "Closed";
-        if (_list.Any(x => x.Id == u.Id)) return $"Already {Pos(u.Id)}";
+        if (IsClosed) return "Очередь закрыта";
+        if (_list.Any(x => x.Id == u.Id)) return $"Ты уже {Pos(u.Id)}-й";
         if (_lastLeave.TryGetValue(u.Id, out var t) && now - t < TimeSpan.FromSeconds(15))
-            return "Wait 15s";
+            return "Подожди 15с";
         _list.Add(u);
         return null;
     }
@@ -27,7 +27,7 @@ public sealed class QueueCore
     public string? Leave(long userId, DateTimeOffset now)
     {
         var i = _list.FindIndex(x => x.Id == userId);
-        if (i < 0) return "Not in queue";
+        if (i < 0) return "Тебя нет в очереди";
         _list.RemoveAt(i);
         _lastLeave[userId] = now;
         _pendingOut.Remove(userId);
@@ -38,11 +38,11 @@ public sealed class QueueCore
     public string? ProposeSwap(long fromId, int number, out long targetId)
     {
         targetId = 0;
-        if (number < 1 || number > _list.Count) return "No such number";
+        if (number < 1 || number > _list.Count) return "Нет такого номера";
         var target = _list[number - 1];
-        if (target.Id == fromId) return "Same user";
-        if (_pendingOut.Contains(fromId)) return "Wait answer";
-        if (_pendingIn.Contains(target.Id)) return "Wait answer";
+        if (target.Id == fromId) return "Это ты";
+        if (_pendingOut.Contains(fromId)) return "Дождись ответа";
+        if (_pendingIn.Contains(target.Id)) return "Дождись ответа";
         targetId = target.Id;
         _pendingOut.Add(fromId);
         _pendingIn.Add(targetId);
@@ -78,10 +78,10 @@ public sealed class QueueCore
 
     public string Render()
     {
-        var head = $"Queue ({_list.Count})";
+        var head = $"🧾 Очередь ({_list.Count})";
         var body = _list.Count == 0
-            ? "Empty. Press join."
+            ? "Очередь пуста. Жми кнопку ниже."
             : string.Join("\n", _list.Select((u, i) => $"{i + 1}. {u.Name}"));
-        return IsClosed ? $"{head}\n{body}\nClosed" : $"{head}\n{body}";
+        return IsClosed ? $"{head}\n{body}\n⛔ Очередь закрыта" : $"{head}\n{body}";
     }
 }

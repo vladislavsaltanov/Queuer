@@ -85,6 +85,6 @@ public sealed class QueueCoreTests
         q.Join(new QueueUser(1, "A"), DateTimeOffset.UtcNow);
         q.Close();
         Assert.NotNull(q.Join(new QueueUser(2, "B"), DateTimeOffset.UtcNow));
-        Assert.Contains("Closed", q.Render());
+        Assert.Contains("закрыта", q.Render());
     }
 }

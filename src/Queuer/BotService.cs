@@ -92,7 +92,7 @@ public sealed class BotService(ITelegramBotClient bot)
 
         if (data is "join" or "leave" or "swap")
         {
-            if (!_chats.TryGetValue(chatId, out var cq)) { await Alert("No queue"); return; }
+            if (!_chats.TryGetValue(chatId, out var cq)) { await Alert("Нет очереди"); return; }
             var name = q.From.FirstName + (q.From.Username is null ? "" : $" (@{q.From.Username})");
             string? err = data switch
             {
@@ -118,7 +118,7 @@ public sealed class BotService(ITelegramBotClient bot)
         }
         if (data is "extend")
         {
-            if (!await IsAdmin(chatId, q.From.Id, ct)) { await Alert("Admins only"); return; }
+            if (!await IsAdmin(chatId, q.From.Id, ct)) { await Alert("Только для админов"); return; }
             if (_chats.TryGetValue(chatId, out var cq)) cq.Deadline += TimeSpan.FromHours(1);
             await SafeDelete(chatId, q.Message.MessageId, ct);
             await bot.AnswerCallbackQuery(q.Id, cancellationToken: ct);
@@ -126,7 +126,7 @@ public sealed class BotService(ITelegramBotClient bot)
         }
         if (data is "close_now")
         {
-            if (!await IsAdmin(chatId, q.From.Id, ct)) { await Alert("Admins only"); return; }
+            if (!await IsAdmin(chatId, q.From.Id, ct)) { await Alert("Только для админов"); return; }
             await CloseQueue(chatId, ct);
             await SafeDelete(chatId, q.Message.MessageId, ct);
             return;
@@ -185,8 +185,8 @@ public sealed class BotService(ITelegramBotClient bot)
     private static InlineKeyboardMarkup Buttons() =>
         new InlineKeyboardButton[][]
         {
-            [("Join", "join"), ("Leave", "leave")],
-            [("Swap", "swap")],
+            [("➕ Встать", "join"), ("➖ Выйти", "leave")],
+            [("🔀 Поменяться", "swap")],
         };
 
     private async Task<bool> IsAdmin(long chatId, long userId, CancellationToken ct)
@@ -205,7 +205,7 @@ public sealed class BotService(ITelegramBotClient bot)
 
     private async Task<string?> SwapPrompt(long chatId, long userId, CancellationToken ct)
     {
-        var sent = await bot.SendMessage(chatId, "Reply with number to swap (60s).",
+        var sent = await bot.SendMessage(chatId, "Ответь на это сообщение номером, с кем меняешься (60с).",
             replyParameters: new ReplyParameters { MessageId = _chats[chatId].MsgId }, cancellationToken: ct);
         _prompts[chatId] = new Prompt(chatId, userId, sent.MessageId, DateTimeOffset.UtcNow + PromptTtl);
         _ = BurnPrompt(chatId, sent.MessageId);
@@ -224,10 +224,14 @@ public sealed class BotService(ITelegramBotClient bot)
         if (err is not null) return; // silent, prompt gone
         var from = m.From!;
         var fname = from.FirstName + (from.Username is null ? "" : $" (@{from.Username})");
-        var sent = await bot.SendMessage(chatId, $"{targetId}: {fname} wants swap. OK?",
+        var tname = q.Core.List.FirstOrDefault(x => x.Id == targetId)?.Name ?? "участник";
+        var mention = $"<a href=\"tg://user?id={targetId}\">{Escape(tname)}</a>";
+        var sent = await bot.SendMessage(chatId,
+            $"{mention}, {Escape(fname)} ({q.Core.Pos(p.UserId)}) хочет поменяться с тобой ({q.Core.Pos(targetId)}). Согласен?",
+            parseMode: ParseMode.Html,
             replyMarkup: new InlineKeyboardButton[][]
             {
-                [("Yes", $"yes:{p.UserId}"), ("No", $"no:{p.UserId}")],
+                [("Да", $"yes:{p.UserId}"), ("Нет", $"no:{p.UserId}")],
             }, cancellationToken: ct);
         _offers[(chatId, p.UserId)] = new Offer(chatId, p.UserId, targetId, sent.MessageId);
         _ = BurnOffer(chatId, p.UserId, targetId, sent.MessageId);
@@ -240,7 +244,7 @@ public sealed class BotService(ITelegramBotClient bot)
         if (!_chats.TryGetValue(chatId, out var q)) return;
         if (!accept) { q.Core.CancelSwap(fromId, targetId); await bot.AnswerCallbackQuery(queryId, cancellationToken: ct); return; }
         var ok = q.Core.AcceptSwap(fromId, targetId);
-        await bot.AnswerCallbackQuery(queryId, ok ? "Swapped" : "Gone", showAlert: !ok, cancellationToken: ct);
+        await bot.AnswerCallbackQuery(queryId, ok ? "Поменялись" : "Уже не в очереди", showAlert: !ok, cancellationToken: ct);
         if (ok) await Render(chatId, ct);
     }
 
@@ -273,10 +277,10 @@ public sealed class BotService(ITelegramBotClient bot)
             var wait = q.Deadline - DateTimeOffset.UtcNow - WarnBefore;
             if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
             if (ct.IsCancellationRequested || !_chats.ContainsKey(chatId)) return;
-            var warn = await bot.SendMessage(chatId, "10 min left. Extend?",
+            var warn = await bot.SendMessage(chatId, "До закрытия очереди 10 мин. Продлить?",
                 replyMarkup: new InlineKeyboardButton[][]
                 {
-                    [("+1h", "extend"), ("Close", "close_now")],
+                    [("+1 час", "extend"), ("Закрыть", "close_now")],
                 }, cancellationToken: ct);
             var left = _chats.TryGetValue(chatId, out var q2) ? q2.Deadline - DateTimeOffset.UtcNow : TimeSpan.Zero;
             if (left > TimeSpan.Zero) await Task.Delay(left, ct);
@@ -285,6 +289,9 @@ public sealed class BotService(ITelegramBotClient bot)
         }
         catch (TaskCanceledException) { } // closed early
     }
+
+    // Escape text for Html parse mode.
+    private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
     private async Task SafeDelete(long chatId, int msgId, CancellationToken ct)
     {
