@@ -2,7 +2,8 @@ using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Queuer;
 
-// Token from env. Fail fast when missing.
+// Load .env first. Real env wins.
+Env.Load();
 var token = Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN");
 if (string.IsNullOrWhiteSpace(token))
 {

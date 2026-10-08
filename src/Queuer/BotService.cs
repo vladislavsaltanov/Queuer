@@ -191,6 +191,7 @@ public sealed class BotService(ITelegramBotClient bot)
 
     private async Task<bool> IsAdmin(long chatId, long userId, CancellationToken ct)
     {
+        if (Env.ChatAdmins(chatId).Contains(userId)) return true; // .env list
         if (_adminCache.TryGetValue((chatId, userId), out var c) && DateTimeOffset.UtcNow - c.At < TimeSpan.FromMinutes(5))
             return c.Admin;
         try
