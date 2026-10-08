@@ -50,10 +50,11 @@ public sealed class BotService(ITelegramBotClient bot)
         if (m.Text is null || m.From is null) return;
         var chatId = m.Chat.Id;
 
-        // Id lookup. Works in DM and groups.
+        // Id lookup. DM only, never leaks ids in chats.
         if (m.Text.StartsWith("/whoami"))
         {
-            await bot.SendMessage(chatId, $"Твой ID: {m.From.Id}\nID чата: {chatId}", cancellationToken: ct);
+            if (m.Chat.Type is ChatType.Private)
+                await bot.SendMessage(chatId, $"Твой ID: {m.From.Id}\nID чата: {chatId}", cancellationToken: ct);
             return;
         }
 
