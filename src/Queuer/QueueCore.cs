@@ -74,6 +74,13 @@ public sealed class QueueCore
 
     public void Close() => IsClosed = true;
 
+    // Restore saved list. Skip dups.
+    public void Restore(IEnumerable<QueueUser> users)
+    {
+        foreach (var u in users)
+            if (!_list.Any(x => x.Id == u.Id)) _list.Add(u);
+    }
+
     public int Pos(long userId) => _list.FindIndex(x => x.Id == userId) + 1;
 
     public string Render()
