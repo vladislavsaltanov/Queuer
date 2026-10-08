@@ -48,6 +48,18 @@ dotnet build Queuer.slnx
 dotnet test Queuer.slnx
 ```
 
+## Деплой на сервер
+
+Нужны только Docker и файл `.env`:
+
+```sh
+cp .env.example .env
+# вписать токен и нужные ADMIN_CHAT_<id> / OPEN_CONTROL_<id>
+docker compose up -d --build
+```
+
+Логи: `docker compose logs -f`. После правок `.env`: `docker compose up -d --force-recreate`.
+
 ## Ограничения
 
 Одна очередь на чат. Без слотов по времени, напоминаний и статистики. Хранение в памяти: после перезапуска очередь начинается заново.
