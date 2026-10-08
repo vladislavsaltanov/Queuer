@@ -53,7 +53,7 @@ public sealed class BotService(ITelegramBotClient bot)
         // Id lookup. Works in DM and groups.
         if (m.Text.StartsWith("/whoami"))
         {
-            await bot.SendMessage(chatId, $"Твой ID: {m.From.Id}", cancellationToken: ct);
+            await bot.SendMessage(chatId, $"Твой ID: {m.From.Id}\nID чата: {chatId}", cancellationToken: ct);
             return;
         }
 
