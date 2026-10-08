@@ -1,5 +1,3 @@
-using Queuer;
-
 namespace Queuer.Tests;
 
 // Env parsing only. No network.
