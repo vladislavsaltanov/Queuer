@@ -35,6 +35,8 @@ public sealed class BotService(ITelegramBotClient bot)
 
     public async Task HandleUpdate(ITelegramBotClient b, Update u, CancellationToken ct)
     {
+        // Trace updates.
+        Console.WriteLine($"upd {u.Type} chat {u.Message?.Chat.Id ?? u.CallbackQuery?.Message?.Chat.Id}");
         if (u.Message is { } m) await OnMessage(m, ct);
         else if (u.CallbackQuery is { } q) await OnCallback(q, ct);
     }
