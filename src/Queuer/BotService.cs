@@ -28,6 +28,7 @@ public sealed class BotService(ITelegramBotClient bot)
     private readonly ConcurrentDictionary<long, Prompt> _prompts = new(); // key: chat
     private readonly ConcurrentDictionary<(long, long), (bool Admin, DateTimeOffset At)> _adminCache = new();
     private readonly ConcurrentDictionary<long, (string Title, List<QueueUser> List)> _closed = new(); // last closed list
+    private readonly ConcurrentDictionary<(long Chat, int Msg), DateTimeOffset> _botMsgs = new(); // bot-sent ids for /delete_all
 
     private static readonly TimeSpan PoolTtl = TimeSpan.FromHours(3);
     private static readonly TimeSpan WarnBefore = TimeSpan.FromMinutes(10);
@@ -80,16 +81,27 @@ public sealed class BotService(ITelegramBotClient bot)
             await CloseQueue(chatId, ct);
             return;
         }
-        if (m.Text.StartsWith("/kick"))
+        if (m.Text.StartsWith("/remove_top"))
+        {
+            if (!await IsAdmin(chatId, m.From.Id, ct)) return;
+            if (!_chats.TryGetValue(chatId, out var qt)) return;
+            await RemoveAt(chatId, qt, 1, ct);
+            return;
+        }
+        if (m.Text.StartsWith("/remove") || m.Text.StartsWith("/kick"))
         {
             if (!await IsAdmin(chatId, m.From.Id, ct)) return;
             var parts = m.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 2 || !int.TryParse(parts[1], out var n) || !_chats.TryGetValue(chatId, out var q))
                 return;
-            var kickedHead = q.Core.List.FirstOrDefault()?.Id;
-            q.Core.Kick(n);
-            await Render(chatId, ct);
-            PingIfNewHead(chatId, kickedHead, q);
+            await RemoveAt(chatId, q, n, ct);
+            return;
+        }
+        if (m.Text.StartsWith("/delete_all"))
+        {
+            if (!await IsAdmin(chatId, m.From.Id, ct)) return;
+            await DeleteAllBotMsgs(chatId, ct);
+            await SafeDelete(chatId, m.MessageId, ct);
             return;
         }
 
@@ -208,6 +220,7 @@ public sealed class BotService(ITelegramBotClient bot)
             try
             {
                 var sent = await bot.SendMessage(chatId, $"{mention}, Ваша очередь!", parseMode: ParseMode.Html);
+                Track(chatId, sent.MessageId);
                 await Task.Delay(TimeSpan.FromSeconds(15));
                 await SafeDelete(chatId, sent.MessageId, CancellationToken.None);
             }
@@ -231,6 +244,7 @@ public sealed class BotService(ITelegramBotClient bot)
         var sent = await bot.SendMessage(chatId, q.Core.Render(),
             replyMarkup: Buttons(), cancellationToken: ct);
         q.MsgId = sent.MessageId;
+        Track(chatId, sent.MessageId);
         Save();
         _ = RunTtl(chatId, q.Cts.Token);
     }
@@ -301,6 +315,7 @@ public sealed class BotService(ITelegramBotClient bot)
     {
         var sent = await bot.SendMessage(chatId, "Ответь на это сообщение номером, с кем меняешься (60с).",
             replyParameters: new ReplyParameters { MessageId = _chats[chatId].MsgId }, cancellationToken: ct);
+        Track(chatId, sent.MessageId);
         _prompts[chatId] = new Prompt(chatId, userId, sent.MessageId, DateTimeOffset.UtcNow + PromptTtl);
         _ = BurnPrompt(chatId, sent.MessageId);
         return null;
@@ -327,6 +342,7 @@ public sealed class BotService(ITelegramBotClient bot)
             {
                 [("Да", $"yes:{p.UserId}"), ("Нет", $"no:{p.UserId}")],
             }, cancellationToken: ct);
+        Track(chatId, sent.MessageId);
         _offers[(chatId, p.UserId)] = new Offer(chatId, p.UserId, targetId, sent.MessageId);
         _ = BurnOffer(chatId, p.UserId, targetId, sent.MessageId);
     }
@@ -376,6 +392,7 @@ public sealed class BotService(ITelegramBotClient bot)
                 {
                     [("+1 час", "extend"), ("Закрыть", "close_now")],
                 }, cancellationToken: ct);
+            Track(chatId, warn.MessageId);
             var left = _chats.TryGetValue(chatId, out var q2) ? q2.Deadline - DateTimeOffset.UtcNow : TimeSpan.Zero;
             if (left > TimeSpan.Zero) await Task.Delay(left, ct);
             await SafeDelete(chatId, warn.MessageId, CancellationToken.None);
@@ -387,6 +404,41 @@ public sealed class BotService(ITelegramBotClient bot)
     // Escape text for Html parse mode.
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
+    // Shared remove-by-number for /kick, /remove, /remove_top.
+    private async Task RemoveAt(long chatId, ChatQueue q, int n, CancellationToken ct)
+    {
+        var headBefore = q.Core.List.FirstOrDefault()?.Id;
+        q.Core.Kick(n);
+        await Render(chatId, ct);
+        PingIfNewHead(chatId, headBefore, q);
+    }
+
+    // Remember bot-sent message for /delete_all. Prunes older than 24h.
+    private void Track(long chatId, int msgId)
+    {
+        _botMsgs[(chatId, msgId)] = DateTimeOffset.UtcNow;
+        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromHours(24);
+        foreach (var k in _botMsgs.Keys)
+            if (_botMsgs.TryGetValue(k, out var at) && at < cutoff)
+                _botMsgs.TryRemove(k, out _);
+    }
+
+    // Delete tracked bot messages from last 24h. Keeps live queue message.
+    private async Task DeleteAllBotMsgs(long chatId, CancellationToken ct)
+    {
+        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromHours(24);
+        _chats.TryGetValue(chatId, out var live);
+        foreach (var k in _botMsgs.Keys)
+        {
+            if (k.Chat != chatId) continue;
+            if (!_botMsgs.TryGetValue(k, out var at) || at < cutoff) { _botMsgs.TryRemove(k, out _); continue; }
+            if (live is not null && k.Msg == live.MsgId) continue; // keep live board
+            _botMsgs.TryRemove(k, out _);
+            await SafeDelete(chatId, k.Msg, ct);
+        }
+        Save();
+    }
+
     // Snapshot chats to disk. Fail-open, never throws.
     private void Save()
     {
@@ -396,7 +448,8 @@ public sealed class BotService(ITelegramBotClient bot)
                 _chats.Select(kv => new QueueStore.SavedQueue(kv.Key, kv.Value.MsgId, kv.Value.Deadline,
                     kv.Value.Core.Title, kv.Value.Core.List.Select(u => new QueueStore.SavedUser(u.Id, u.Name)).ToList())).ToList(),
                 _closed.Select(kv => new QueueStore.SavedClosed(kv.Key, kv.Value.Title,
-                    kv.Value.List.Select(u => new QueueStore.SavedUser(u.Id, u.Name)).ToList())).ToList());
+                    kv.Value.List.Select(u => new QueueStore.SavedUser(u.Id, u.Name)).ToList())).ToList(),
+                _botMsgs.Select(kv => new QueueStore.SavedBotMsg(kv.Key.Chat, kv.Key.Msg, kv.Value)).ToList());
             QueueStore.Save(snap);
         }
         catch { } // disk full or locked, skip
@@ -406,6 +459,10 @@ public sealed class BotService(ITelegramBotClient bot)
     public Task RestoreAsync(CancellationToken ct)
     {
         var snap = QueueStore.Load();
+        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromHours(24);
+        foreach (var b in snap.BotMsgs ?? [])
+            if (b.At >= cutoff)
+                _botMsgs[(b.ChatId, b.MsgId)] = b.At;
         foreach (var c in snap.Closed)
             _closed[c.ChatId] = (c.Title, c.Users.Select(u => new QueueUser(u.Id, u.Name)).ToList());
         foreach (var s in snap.Active)

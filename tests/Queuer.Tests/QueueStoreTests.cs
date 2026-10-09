@@ -13,7 +13,8 @@ public sealed class QueueStoreTests
             var snap = new QueueStore.Snapshot(
                 [new QueueStore.SavedQueue(5, 7, DateTimeOffset.UnixEpoch, "Пятница",
                     [new QueueStore.SavedUser(1, "A"), new QueueStore.SavedUser(2, "B")])],
-                [new QueueStore.SavedClosed(6, "", [new QueueStore.SavedUser(3, "C")])]);
+                [new QueueStore.SavedClosed(6, "", [new QueueStore.SavedUser(3, "C")])],
+                [new QueueStore.SavedBotMsg(5, 9, DateTimeOffset.UtcNow)]);
             QueueStore.Save(snap);
             var back = QueueStore.Load();
             Assert.Single(back.Active);
@@ -21,6 +22,8 @@ public sealed class QueueStoreTests
             Assert.Equal([1L, 2L], back.Active[0].Users.Select(u => u.Id));
             Assert.Single(back.Closed);
             Assert.Equal(3L, back.Closed[0].Users[0].Id);
+            Assert.Single(back.BotMsgs ?? []);
+            Assert.Equal(9, (back.BotMsgs ?? [])[0].MsgId);
         }
         finally
         {

@@ -11,7 +11,8 @@ public sealed class QueueStore
     public sealed record SavedUser(long Id, string Name);
     public sealed record SavedQueue(long ChatId, int MsgId, DateTimeOffset Deadline, string Title, List<SavedUser> Users);
     public sealed record SavedClosed(long ChatId, string Title, List<SavedUser> Users);
-    public sealed record Snapshot(List<SavedQueue> Active, List<SavedClosed> Closed);
+    public sealed record SavedBotMsg(long ChatId, int MsgId, DateTimeOffset At);
+    public sealed record Snapshot(List<SavedQueue> Active, List<SavedClosed> Closed, List<SavedBotMsg>? BotMsgs = null);
 
     public static void Save(Snapshot snap)
     {
