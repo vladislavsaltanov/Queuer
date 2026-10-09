@@ -94,4 +94,15 @@ public sealed class QueueCoreTests
         Assert.Equal([2, 1], q.List.Select(u => u.Id));
         Assert.Equal("B", q.List[0].Name);
     }
+
+    [Fact]
+    public void Render_With_Title_Shows_Title()
+    {
+        var q = New();
+        q.Title = "Пятница";
+        q.Join(new QueueUser(1, "A"), DateTimeOffset.UtcNow);
+        Assert.Contains("Пятница", q.Render());
+        Assert.DoesNotContain("🧾 Очередь", q.Render());
+        Assert.Contains("🧾 Очередь", New().Render());
+    }
 }

@@ -23,6 +23,7 @@ bot.StartReceiving(
 
 var me = await bot.GetMe(cancellationToken: cts.Token);
 Console.WriteLine($"@{me.Username} up. Ctrl+C to stop.");
+await svc.RestoreAsync(cts.Token);
 Console.CancelKeyPress += (_, _) => cts.Cancel();
 await Task.Delay(Timeout.Infinite, cts.Token).ContinueWith(_ => 0);
 return 0;

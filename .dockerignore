@@ -6,4 +6,5 @@ out/
 .idea/
 .env
 *.user
+data/
 TestResults/

@@ -27,7 +27,7 @@ public sealed class BotService(ITelegramBotClient bot)
     private readonly ConcurrentDictionary<(long, long), Offer> _offers = new(); // key: chat + from
     private readonly ConcurrentDictionary<long, Prompt> _prompts = new(); // key: chat
     private readonly ConcurrentDictionary<(long, long), (bool Admin, DateTimeOffset At)> _adminCache = new();
-    private readonly ConcurrentDictionary<long, List<QueueUser>> _closed = new(); // last closed list
+    private readonly ConcurrentDictionary<long, (string Title, List<QueueUser> List)> _closed = new(); // last closed list
 
     private static readonly TimeSpan PoolTtl = TimeSpan.FromHours(3);
     private static readonly TimeSpan WarnBefore = TimeSpan.FromMinutes(10);
@@ -65,7 +65,7 @@ public sealed class BotService(ITelegramBotClient bot)
         {
             if (!await CanControl(chatId, m.From.Id, ct)) return; // silent for others
             if (_chats.ContainsKey(chatId)) return; // one queue per chat
-            await StartQueue(chatId, ct);
+            await StartQueue(chatId, ParseTitle(m.Text, "/start_queue"), ct);
             return;
         }
         if (m.Text.StartsWith("/continue_queue"))
@@ -86,8 +86,10 @@ public sealed class BotService(ITelegramBotClient bot)
             var parts = m.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 2 || !int.TryParse(parts[1], out var n) || !_chats.TryGetValue(chatId, out var q))
                 return;
+            var kickedHead = q.Core.List.FirstOrDefault()?.Id;
             q.Core.Kick(n);
             await Render(chatId, ct);
+            PingIfNewHead(chatId, kickedHead, q);
             return;
         }
 
@@ -122,6 +124,7 @@ public sealed class BotService(ITelegramBotClient bot)
         {
             if (!_chats.TryGetValue(chatId, out var cq)) { await Alert("Нет очереди"); return; }
             var name = q.From.FirstName + (q.From.Username is null ? "" : $" (@{q.From.Username})");
+            var headBefore = data is "leave" ? cq.Core.List.FirstOrDefault()?.Id : null;
             string? err = data switch
             {
                 "join" => cq.Core.Join(new QueueUser(q.From.Id, name), DateTimeOffset.UtcNow),
@@ -129,7 +132,11 @@ public sealed class BotService(ITelegramBotClient bot)
                 _ => await SwapPrompt(chatId, q.From.Id, ct),
             };
             if (err is not null) await Alert(err);
-            else if (data is "join" or "leave") await Render(chatId, ct);
+            else if (data is "join" or "leave")
+            {
+                await Render(chatId, ct);
+                if (data is "leave") PingIfNewHead(chatId, headBefore, cq);
+            }
             else await bot.AnswerCallbackQuery(q.Id, cancellationToken: ct);
             return;
         }
@@ -147,7 +154,7 @@ public sealed class BotService(ITelegramBotClient bot)
         if (data is "extend")
         {
             if (!await CanControl(chatId, q.From.Id, ct)) { await Alert("Только для админов"); return; }
-            if (_chats.TryGetValue(chatId, out var cq)) cq.Deadline += TimeSpan.FromHours(1);
+            if (_chats.TryGetValue(chatId, out var cq)) { cq.Deadline += TimeSpan.FromHours(1); Save(); }
             await SafeDelete(chatId, q.Message.MessageId, ct);
             await bot.AnswerCallbackQuery(q.Id, cancellationToken: ct);
             return;
@@ -168,18 +175,53 @@ public sealed class BotService(ITelegramBotClient bot)
         return err;
     }
 
-    private async Task StartQueue(long chatId, CancellationToken ct)
+    private async Task StartQueue(long chatId, string title, CancellationToken ct)
     {
         _closed.TryRemove(chatId, out _); // fresh start drops saved list
-        await PostQueue(chatId, new ChatQueue { Deadline = DateTimeOffset.UtcNow + PoolTtl }, ct);
+        var q = new ChatQueue { Deadline = DateTimeOffset.UtcNow + PoolTtl };
+        q.Core.Title = title;
+        await PostQueue(chatId, q, ct);
+    }
+
+    // Text after command, one line, max 80. Strips @bot mention.
+    private static string ParseTitle(string text, string cmd)
+    {
+        var rest = text.StartsWith(cmd) ? text[cmd.Length..] : "";
+        rest = rest.Trim();
+        if (rest.StartsWith("@"))
+        {
+            var sp = rest.IndexOf(' ');
+            rest = sp < 0 ? "" : rest[(sp + 1)..].Trim();
+        }
+        rest = rest.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        return rest.Length > 80 ? rest[..80].TrimEnd() : rest;
+    }
+
+    // Ping new head after leave/kick. Fire and forget, self-deletes in 15s.
+    private void PingIfNewHead(long chatId, long? headBefore, ChatQueue cq)
+    {
+        var head = cq.Core.List.FirstOrDefault();
+        if (head is null || head.Id == headBefore) return;
+        var mention = $"<a href=\"tg://user?id={head.Id}\">{Escape(head.Name)}</a>";
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var sent = await bot.SendMessage(chatId, $"{mention}, Ваша очередь!", parseMode: ParseMode.Html);
+                await Task.Delay(TimeSpan.FromSeconds(15));
+                await SafeDelete(chatId, sent.MessageId, CancellationToken.None);
+            }
+            catch { } // best effort
+        });
     }
 
     private async Task ContinueQueue(long chatId, CancellationToken ct)
     {
         if (_chats.ContainsKey(chatId)) return; // active wins
-        if (!_closed.TryRemove(chatId, out var list) || list.Count == 0) return; // nothing saved
+        if (!_closed.TryRemove(chatId, out var saved) || saved.List.Count == 0) return; // nothing saved
         var q = new ChatQueue { Deadline = DateTimeOffset.UtcNow + PoolTtl };
-        q.Core.Restore(list);
+        q.Core.Title = saved.Title;
+        q.Core.Restore(saved.List);
         await PostQueue(chatId, q, ct);
     }
 
@@ -189,6 +231,7 @@ public sealed class BotService(ITelegramBotClient bot)
         var sent = await bot.SendMessage(chatId, q.Core.Render(),
             replyMarkup: Buttons(), cancellationToken: ct);
         q.MsgId = sent.MessageId;
+        Save();
         _ = RunTtl(chatId, q.Cts.Token);
     }
 
@@ -199,13 +242,14 @@ public sealed class BotService(ITelegramBotClient bot)
         try
         {
             q.Core.Close();
-            if (q.Core.List.Count > 0) _closed[chatId] = [.. q.Core.List]; // keep for /continue_queue
+            if (q.Core.List.Count > 0) _closed[chatId] = (q.Core.Title, [.. q.Core.List]); // keep for /continue_queue
             q.Cts.Cancel();
             await bot.EditMessageText(chatId, q.MsgId, q.Core.Render(), cancellationToken: ct);
             await bot.EditMessageReplyMarkup(chatId, q.MsgId, replyMarkup: null, cancellationToken: ct);
         }
         catch (ApiRequestException) { } // stale message, skip
         finally { q.Gate.Release(); _chats.TryRemove(chatId, out _); }
+        Save();
     }
 
     private async Task Render(long chatId, CancellationToken ct)
@@ -223,6 +267,7 @@ public sealed class BotService(ITelegramBotClient bot)
         catch (ApiRequestException ex) when (ex.Message.Contains("not modified")) { } // same text
         catch (ApiRequestException ex) when (ex.ErrorCode == 429) { } // flood, next edit wins
         finally { q.Gate.Release(); }
+        Save();
     }
 
     private static InlineKeyboardMarkup Buttons() =>
@@ -341,6 +386,38 @@ public sealed class BotService(ITelegramBotClient bot)
 
     // Escape text for Html parse mode.
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    // Snapshot chats to disk. Fail-open, never throws.
+    private void Save()
+    {
+        try
+        {
+            var snap = new QueueStore.Snapshot(
+                _chats.Select(kv => new QueueStore.SavedQueue(kv.Key, kv.Value.MsgId, kv.Value.Deadline,
+                    kv.Value.Core.Title, kv.Value.Core.List.Select(u => new QueueStore.SavedUser(u.Id, u.Name)).ToList())).ToList(),
+                _closed.Select(kv => new QueueStore.SavedClosed(kv.Key, kv.Value.Title,
+                    kv.Value.List.Select(u => new QueueStore.SavedUser(u.Id, u.Name)).ToList())).ToList());
+            QueueStore.Save(snap);
+        }
+        catch { } // disk full or locked, skip
+    }
+
+    // Resume chats after restart. Timers restart, no re-render.
+    public Task RestoreAsync(CancellationToken ct)
+    {
+        var snap = QueueStore.Load();
+        foreach (var c in snap.Closed)
+            _closed[c.ChatId] = (c.Title, c.Users.Select(u => new QueueUser(u.Id, u.Name)).ToList());
+        foreach (var s in snap.Active)
+        {
+            var q = new ChatQueue { MsgId = s.MsgId, Deadline = s.Deadline, LastRender = DateTimeOffset.UtcNow };
+            q.Core.Title = s.Title;
+            q.Core.Restore(s.Users.Select(u => new QueueUser(u.Id, u.Name)));
+            _chats[s.ChatId] = q;
+            _ = RunTtl(s.ChatId, q.Cts.Token);
+        }
+        return Task.CompletedTask;
+    }
 
     private async Task SafeDelete(long chatId, int msgId, CancellationToken ct)
     {

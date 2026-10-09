@@ -12,6 +12,7 @@ public sealed class QueueCore
 
     public IReadOnlyList<QueueUser> List => _list;
     public bool IsClosed { get; private set; }
+    public string Title { get; set; } = "";
 
     // Null = ok, text = alert.
     public string? Join(QueueUser u, DateTimeOffset now)
@@ -85,10 +86,10 @@ public sealed class QueueCore
 
     public string Render()
     {
-        var head = $"🧾 Очередь ({_list.Count})";
+        var head = string.IsNullOrWhiteSpace(Title) ? $"🧾 Очередь ({_list.Count})" : $"🧾 {Title} ({_list.Count})";
         var body = _list.Count == 0
             ? "Очередь пуста. Жми кнопку ниже."
             : string.Join("\n", _list.Select((u, i) => $"{i + 1}. {u.Name}"));
-        return IsClosed ? $"{head}\n{body}\n⛔ Очередь закрыта" : $"{head}\n{body}";
+        return IsClosed ? $"{head}\n{body}\n⛔ Очередь закрыта" : $"{head}\n{body}\n\nНе забывайте выходить из очереди после своего ответа!";
     }
 }
